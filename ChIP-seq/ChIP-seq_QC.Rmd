@@ -1,0 +1,276 @@
+---
+title: "ChIP-seq_QC"
+date: "2021-12-01"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+## **This script is used to perform quality control and peak annotation for our ChIP-seq data via R package ChIPseeker**
+
+>  Guangchuang Yu, Li-Gen Wang, and Qing-Yu He. ChIPseeker: an R/Bioconductor package
+  for ChIP peak annotation, comparison and visualization. Bioinformatics 2015,
+  31(14):2382-2383
+
+>  Marc Carlson (2019). org.Dm.eg.db: Genome wide annotation for Fly. R package version
+3.10.0.
+
+## loading packages
+```{r}
+library(ChIPseeker)
+library(org.Dm.eg.db)
+library(TxDb.Dmelanogaster.UCSC.dm6.ensGene)
+txdb <- TxDb.Dmelanogaster.UCSC.dm6.ensGene
+library(clusterProfiler)
+library(ggupset)
+library(ggplot2)
+library(ggimage)
+```
+## read peak files (.bed file)
+```{r}
+peak <- readPeakFile("sp1.bed")
+peak
+```
+## ChIP peaks coverage plot
+```{r covplot,fig.height=6,fig.width=8}
+# show
+covplot(peak, weightCol = "V6", chrs = c("chr2L", "chr2R"))
+```
+
+## peaks binding to TSS regions
+
+### Get promoters from annotation package
+```{r}
+# one step function
+# peakHeatmap("test_peaks.narrowPeak",
+# TxDb=txdb, upstream=1000, downstream=1000, color="red")
+
+# TxDb.Dmelanogaster.UCSC.dm6.ensGene
+# choose promoter region -1000 ~ +1000
+promoter <- getPromoters(TxDb = txdb, upstream = 1000, downstream = 1000)
+```
+
+### Generate TSS regions for peaks mapping
+```{r}
+tagMatrix <- getTagMatrix(peak, windows = promoter) # Generate TSS regions for peaks mapping
+```
+
+### Heatmap of ChIP binding to TSS regions
+```{r}
+tagHeatmap(tagMatrix, xlim = c(-1000, 1000), color = "red") # peaks binding to TSS regions
+```
+
+### Average profile plot
+```{r}
+plotAvgProf(tagMatrix,
+    xlim = c(-1000, 1000),
+    xlab = "Genomic Region (5'->3')", ylab = "Read Count Frequency"
+)
+# one step from bed file to average profile plot
+# plotAvgProf2(files[[4]], TxDb=txdb, upstream=3000, downstream=3000,
+#             xlab="Genomic Region (5'->3')", ylab = "Read Count Frequency")
+```
+## Peak Annotation
+
+## generate PeakAnnotation instance
+```{r}
+# output csAnno instance
+# as.GRanges to convert csAnno to GRanges instance,
+# and as.data.frame to convert csAnno to data.frame
+peakAnno <- annotatePeak(peak,
+    tssRegion = c(-1000, 1000),
+    TxDb = txdb
+)
+```
+
+### Save peak annotation
+```{r}
+df <- as.data.frame(peakAnno)
+# only promoters
+write.csv(df[
+    which(df$annotation == "Promoter"),
+    c("seqnames", "start", "end", "V6", "geneId")
+], file = "./peak_annotations/all_promoters.csv", row.names = FALSE)
+# all peaks with annotations
+write.csv(df[, c("seqnames", "start", "end", "V6", "geneId", "annotation")],
+    file = "./peak_annotations/all.csv", row.names = FALSE
+)
+```
+
+### Export stat information
+```{r}
+# generate peaks stat information
+stat <- data.frame(
+    Feature = peakAnno@annoStat[["Feature"]],
+    Frequency = peakAnno@annoStat[["Frequency"]]
+)
+#write.csv
+write.csv(stat, file = "./peak_annotations/stat_sp1.csv", row.names = FALSE)
+detail <- peakAnno@detailGenomicAnnotation
+detail_stat <- c(colSums(detail == "TRUE"))
+```
+```{r}
+sum(peakAnno@anno@elementMetadata@listData[["distanceToTSS"]] < 20000 &
+    peakAnno@anno@elementMetadata@listData[["distanceToTSS"]] > -20000)
+length(which((peakAnno@anno@elementMetadata@listData[["distanceToTSS"]] < 20000 &
+    peakAnno@anno@elementMetadata@listData[["distanceToTSS"]] > -20000)))
+```
+
+### plot 3Dpie
+```{r}
+library(plotrix)
+
+pie3D(stat$Frequency,
+    radius = 1, height = 0.1, theta = 1,
+    col = hcl.colors(length(df), "Spectral"),
+    border = par("fg"), shade = 0.7, labels = stat$Feature,
+    labelcex = 1, explode = 0.1
+)
+```
+## Visualize the spatial distribution of ChIP-seq peaks in genome 
+```{r Visualization}
+plotAnnoPie(peakAnno)
+plotAnnoBar(peakAnno)
+vennpie(peakAnno)
+upsetplot(peakAnno)
+upsetplot(peakAnno, vennpie = TRUE)
+```
+
+## Overload some plotting function 
+```{r funcdef}
+new_vennpie <- function(x, r = 0.2, cex = 1.2) {
+    detailGenomicAnnotation <- x@detailGenomicAnnotation
+    distance <- as.data.frame(x)$distanceToTSS
+    total <- nrow(detailGenomicAnnotation)
+    Genic <- sum(detailGenomicAnnotation$genic)
+    Intergenic <- total - Genic
+    Distal_Intergenic <- sum(detailGenomicAnnotation$distal_intergenic)
+    Intron <- sum(detailGenomicAnnotation$Intron)
+    Exon <- sum(detailGenomicAnnotation$Exon)
+    Upstream <- sum(detailGenomicAnnotation$Promoter & distance <
+        0)
+    Downstream <- sum(detailGenomicAnnotation$downstream)
+    cols <- c(
+        NO = "white", Genic = "#3182bd", Intergenic = "#fec44f",
+        Intron = "#fc9272", Exon = "#9ecae1", Upstream = "#ffeda0",
+        Downstream = "#fee0d2", Distal_Intergenic = "#d95f0e"
+    )
+    pie(1,
+        radius = r, init.angle = 90, col = "white",
+        border = NA, labels = ""
+    )
+    floating.pie(0, 0, c(
+        Exon, Genic - Exon, Distal_Intergenic,
+        Downstream, Intergenic - Distal_Intergenic - Downstream
+    ) +
+        1,
+    radius = 4 * r, startpos = pi / 2, col = cols[c(
+        "Exon",
+        "NO", "NO", "Downstream", "NO"
+    )],
+    border = NA
+    )
+    floating.pie(0, 0, c(
+        Genic - Intron, Intron, Distal_Intergenic,
+        Intergenic - Upstream - Distal_Intergenic, Upstream
+    ) +
+        1, radius = 3 * r, startpos = pi / 2, col = cols[c(
+        "NO",
+        "Intron", "Distal_Intergenic", "NO",
+        "Upstream"
+    )], border = NA)
+    floating.pie(0, 0, c(Genic, Intergenic) + 1,
+        radius = 2 *
+            r, startpos = pi / 2, col = cols[c("Genic", "Intergenic")],
+        border = NA
+    )
+    legend(3 * r, 3 * r,
+        legend = sub("_", " ", names(cols)[-1]),
+        fill = cols[-1], bty = "n", cex = cex
+    )
+}
+
+
+venpl <- function(x, order_by = "freq", vennpie = FALSE, vp = list(
+                      x = 0.6,
+                      y = 0.7, width = 0.8, height = 0.8
+                  )) {
+    y <- x@detailGenomicAnnotation
+    nn <- names(y)
+    y <- as.matrix(y)
+    res <- tibble::tibble(anno = lapply(1:nrow(y), function(i) nn[y[i, ]]))
+    g <- ggplot(res, aes_(x = ~anno)) +
+        geom_bar() +
+        xlab(NULL) +
+        ylab(NULL) +
+        theme_minimal() +
+        ggupset::scale_x_upset(
+            n_intersections = 20,
+            order_by = order_by
+        )
+    if (!vennpie) {
+          return(g)
+      }
+    f <- function() vennpie(x, cex = 0.9)
+    p <- ggplotify::as.ggplot(f) + coord_fixed()
+    ggplotify::as.ggplot(g) + ggimage::geom_subview(
+        subview = p,
+        x = vp$x, y = vp$y, width = vp$width, height = vp$height
+    )
+}
+```
+
+### Plotting
+```{r}
+plotAnnoPie(peakAnno, border = NA)
+new_vennpie(peakAnno)
+venpl(peakAnno)
+```
+
+```{r}
+x <- peakAnno
+order_by <- "freq"
+vennpie <- FALSE
+y <- x@detailGenomicAnnotation
+nn <- names(y)
+y <- as.matrix(y)
+res <- tibble::tibble(anno = lapply(1:nrow(y), function(i) nn[y[i, ]]))
+g <- ggplot(res, aes_(x = ~anno)) +
+    scale_y_continuous(breaks = seq(0, 3000, 500), expand = c(0, 10)) +
+    geom_bar(fill = "#67B465") +
+    xlab(NULL) +
+    ylab(NULL) +
+    theme_classic() +
+    ggupset::scale_x_upset(
+        n_intersections = 20,
+        order_by = order_by
+    )
+ggplotify::as.ggplot(g)
+```
+## Contrast between two parallel ChIP-seq experiments
+```{r}
+peakAnno1 <- annotatePeak(readPeakFile("sp1.bed"),
+    tssRegion = c(-1000, 1000),
+    TxDb = txdb
+)
+peakAnno2 <- annotatePeak(readPeakFile("sp2.bed"),
+    tssRegion = c(-1000, 1000),
+    TxDb = txdb
+)
+peakAnnoList <- lapply(list("sp1.bed", "sp2.bed"), annotatePeak,
+    TxDb = txdb,
+    tssRegion = c(-1000, 1000), verbose = FALSE
+)
+plotAnnoBar(peakAnnoList)
+plotDistToTSS(peakAnnoList, title = "sp1&sp2")
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
