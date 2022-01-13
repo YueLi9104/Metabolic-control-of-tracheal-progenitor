@@ -317,7 +317,7 @@ The other bioinformatics analyses are mainly based on `Windows 10 Home `with `R 
 │          all_promoters.csv
 │          stat_sp1.csv
 │
-└─RNA-seq
+└─SMART-Seq
     │  README.html
     │  README.md
     │
