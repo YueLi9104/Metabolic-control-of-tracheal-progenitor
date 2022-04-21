@@ -6,6 +6,10 @@ This is the repository for scripts used in paper of
 
 _Li and Dong et al, 2021_
 
+release version v1.0.0:
+```
+https://doi.org/10.5281/zenodo.6474350
+```
 ---
 
 ## ChIP-seq_QC
